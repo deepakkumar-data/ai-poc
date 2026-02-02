@@ -1,0 +1,2 @@
+# This file ensures the test_videos/ directory is tracked by git
+# Video files themselves are ignored (see .gitignore)

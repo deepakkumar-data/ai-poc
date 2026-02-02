@@ -868,7 +868,26 @@ def process_live_camera(camera_index: int, roi: Optional[Tuple], trigger_line_x:
         motion_status = "✅ Motion Detected" if st.session_state.engine.motion_detected else "⏸️ No Motion"
         motion_color = "🟢" if st.session_state.engine.motion_detected else "🔴"
         st.sidebar.markdown(f"{motion_color} **{motion_status}**")
-        st.sidebar.caption("⚠️ Classification only occurs when motion is detected")
+        
+        # Background learning status
+        if hasattr(st.session_state.engine, 'frames_processed'):
+            bg_ready = st.session_state.engine.frames_processed >= st.session_state.engine.background_learning_frames
+            if not bg_ready:
+                progress = st.session_state.engine.frames_processed / st.session_state.engine.background_learning_frames
+                st.sidebar.progress(progress, text=f"Background Learning: {st.session_state.engine.frames_processed}/{st.session_state.engine.background_learning_frames}")
+                st.sidebar.caption("⏳ System is learning the background. Objects will be detected after learning completes.")
+            else:
+                st.sidebar.caption("✅ Background ready - Object detection active")
+        
+        # Object detection status
+        if hasattr(st.session_state.engine, 'tracked_objects'):
+            num_objects = len([obj for obj in st.session_state.engine.tracked_objects.values() if not obj.get('has_crossed', False)])
+            if num_objects > 0:
+                st.sidebar.success(f"🔍 {num_objects} object(s) detected and tracking")
+            elif bg_ready:
+                st.sidebar.info("👀 Waiting for objects to appear in ROI")
+        
+        st.sidebar.caption("💡 **Tip**: Adjust ROI and motion sensitivity if objects aren't detected")
     else:
         st.sidebar.info("Start camera to see motion detection status")
     

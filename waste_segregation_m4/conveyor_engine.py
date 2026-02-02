@@ -64,11 +64,17 @@ class ConveyorEngine:
         self.classification_cooldown = classification_cooldown
         
         # Background subtractor for object detection
+        # Lower varThreshold for better sensitivity (default 16, we use 25)
+        # Lower history for faster adaptation (300 frames ~10 seconds at 30fps)
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=500,
-            varThreshold=50,
+            history=300,
+            varThreshold=25,  # Lower threshold = more sensitive (was 50)
             detectShadows=True
         )
+        
+        # Track frames processed for background learning
+        self.frames_processed = 0
+        self.background_learning_frames = 30  # Learn background for first 30 frames
         
         # Temporal sync: Track objects and their classification status
         self.tracked_objects = {}  # {object_id: {centroid, last_classified_time, label, confidence}}
@@ -81,9 +87,9 @@ class ConveyorEngine:
         
         # Motion detection
         self.previous_frame = None
-        self.motion_threshold = 0.02  # 2% of ROI pixels must change for motion
+        self.motion_threshold = 0.01  # 1% of ROI pixels must change for motion (was 0.02)
         self.motion_detected = False
-        self.min_motion_area = 500  # Minimum area of motion pixels
+        self.min_motion_area = 200  # Minimum area of motion pixels (was 500)
         
         # Visual overlay settings
         self.roi_color = (0, 255, 0)  # Green
@@ -137,7 +143,7 @@ class ConveyorEngine:
         contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         objects = []
-        min_area = 500  # Minimum object area to filter noise
+        min_area = 200  # Minimum object area to filter noise (was 500 - reduced for better detection)
         
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -280,7 +286,7 @@ class ConveyorEngine:
         """
         Check if object has crossed the trigger line and should be classified.
         Implements temporal sync to prevent duplicate classifications.
-        Only classifies when motion is detected (conveyor is moving).
+        Can classify with or without motion (for static objects after background learning).
         """
         obj_id = obj['id']
         cx, cy = obj['centroid']
@@ -293,8 +299,13 @@ class ConveyorEngine:
         if tracked_data.get('has_crossed', False):
             return False
         
-        # IMPORTANT: Only classify if motion is detected (conveyor is moving)
-        if not self.motion_detected:
+        # Allow classification if:
+        # 1. Motion is detected (conveyor moving), OR
+        # 2. Background is ready (learned enough) - allows static object detection
+        bg_ready = self.frames_processed >= self.background_learning_frames
+        can_proceed = self.motion_detected or bg_ready
+        
+        if not can_proceed:
             return False
         
         # Check if centroid has crossed the trigger line
@@ -458,6 +469,9 @@ class ConveyorEngine:
         # Get ROI mask
         roi_mask = self._get_roi_mask(frame)
         
+        # Increment frame counter for background learning
+        self.frames_processed += 1
+        
         # Detect motion first (conveyor must be moving)
         motion_detected = self._detect_motion(frame, roi_mask)
         
@@ -467,8 +481,19 @@ class ConveyorEngine:
         # Assign IDs to objects
         tracked_objects = self._assign_object_ids(detected_objects)
         
+        # Debug: Print detection status periodically
+        if self.frames_processed % 30 == 0:  # Every 30 frames
+            bg_ready = self.frames_processed >= self.background_learning_frames
+            print(f"🔍 Detection Status: {len(detected_objects)} objects detected | "
+                  f"Motion: {'Yes' if motion_detected else 'No'} | "
+                  f"Background: {'Ready' if bg_ready else f'Learning ({self.frames_processed}/{self.background_learning_frames})'}")
+        
         # Only check for trigger line crossings and classify if motion is detected
-        if motion_detected:
+        # OR if background is ready and we have objects (allow static object detection after learning)
+        bg_ready = self.frames_processed >= self.background_learning_frames
+        can_classify = motion_detected or (bg_ready and len(tracked_objects) > 0)
+        
+        if can_classify:
             for obj in tracked_objects:
                 if self._check_trigger_line_crossing(obj):
                     # Classify object
@@ -479,14 +504,27 @@ class ConveyorEngine:
                     self.tracked_objects[obj_id]['label'] = label
                     self.tracked_objects[obj_id]['confidence'] = confidence
                     
-                    print(f"✅ Classified Object {obj_id}: {label} ({confidence:.2%}) [Motion: Yes]")
-        else:
-            # Reset has_crossed flag for objects when motion stops (allows re-classification when motion resumes)
-            # This allows objects to be classified again if they move after being static
-            pass
+                    motion_status = "Yes" if motion_detected else "No (Static)"
+                    print(f"✅ Classified Object {obj_id}: {label} ({confidence:.2%}) [Motion: {motion_status}]")
+        elif len(tracked_objects) > 0 and not bg_ready:
+            # Objects detected but background still learning
+            if self.frames_processed % 30 == 0:
+                print(f"⏳ Background learning in progress... ({self.frames_processed}/{self.background_learning_frames} frames)")
         
         # Draw overlays
         result_frame = self._draw_overlays(frame, tracked_objects, show_bg_mask)
+        
+        # Add detection status text to frame
+        status_y = 60
+        if not bg_ready:
+            cv2.putText(result_frame, f"Background Learning: {self.frames_processed}/{self.background_learning_frames}",
+                       (10, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        elif len(detected_objects) == 0:
+            cv2.putText(result_frame, "No objects detected - Adjust ROI or check lighting",
+                       (10, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        else:
+            cv2.putText(result_frame, f"Objects detected: {len(detected_objects)}",
+                       (10, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         
         return result_frame
     
@@ -639,9 +677,10 @@ class ConveyorEngine:
         self.classification_queue.clear()
         self.previous_frame = None
         self.motion_detected = False
+        self.frames_processed = 0
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=500,
-            varThreshold=50,
+            history=300,
+            varThreshold=25,  # Lower threshold = more sensitive
             detectShadows=True
         )
         print("🔄 Conveyor engine reset")

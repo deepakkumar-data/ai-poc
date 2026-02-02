@@ -99,10 +99,11 @@ class WasteClassifier:
     def _setup_device(self, device: Optional[str], force_mps: bool) -> torch.device:
         """
         Setup and configure the PyTorch device.
+        Cross-platform: MPS (macOS), CUDA (Windows/Linux), CPU (fallback)
         
         Args:
             device: Preferred device
-            force_mps: Whether to force MPS on Apple Silicon
+            force_mps: Whether to force MPS on Apple Silicon (macOS only)
             
         Returns:
             Configured torch.device
@@ -110,16 +111,17 @@ class WasteClassifier:
         if device is not None:
             return torch.device(device)
         
-        # Force MPS for M4 GPU acceleration if available
-        if force_mps and torch.backends.mps.is_available():
+        # Check for MPS (macOS Apple Silicon)
+        if force_mps and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             if torch.backends.mps.is_built():
                 print(f"✅ Using MPS device for GPU acceleration on Apple Silicon")
                 return torch.device("mps")
             else:
                 print("⚠️  MPS not built, falling back to CPU")
                 return torch.device("cpu")
+        # Check for CUDA (Windows/Linux with NVIDIA GPU)
         elif torch.cuda.is_available():
-            print("✅ Using CUDA device")
+            print("✅ Using CUDA device for GPU acceleration")
             return torch.device("cuda")
         else:
             print("ℹ️  Using CPU device")

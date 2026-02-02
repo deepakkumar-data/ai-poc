@@ -42,12 +42,27 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Camera backends for macOS compatibility
-CAMERA_BACKENDS = [
-    (cv2.CAP_AVFOUNDATION, "AVFoundation (macOS native)"),
-    (cv2.CAP_ANY, "Default"),
-    (cv2.CAP_QT, "QuickTime"),
-]
+# Camera backends - cross-platform support
+import platform
+_system = platform.system()
+
+if _system == "Darwin":  # macOS
+    CAMERA_BACKENDS = [
+        (cv2.CAP_AVFOUNDATION, "AVFoundation (macOS native)"),
+        (cv2.CAP_ANY, "Default"),
+        (cv2.CAP_QT, "QuickTime"),
+    ]
+elif _system == "Windows":  # Windows
+    CAMERA_BACKENDS = [
+        (cv2.CAP_DSHOW, "DirectShow (Windows native)"),
+        (cv2.CAP_ANY, "Default"),
+        (cv2.CAP_MSMF, "Microsoft Media Foundation"),
+    ]
+else:  # Linux and others
+    CAMERA_BACKENDS = [
+        (cv2.CAP_V4L2, "Video4Linux2 (Linux)"),
+        (cv2.CAP_ANY, "Default"),
+    ]
 
 # Initialize session state
 def init_session_state():
@@ -481,15 +496,31 @@ def open_camera(camera_index: int) -> Optional[cv2.VideoCapture]:
 
 def show_camera_error(camera_index: int) -> None:
     """Display camera error message with troubleshooting steps."""
+    import platform
+    _system = platform.system()
+    
     st.error(f"❌ Could not open camera {camera_index}")
     st.error("**Troubleshooting Steps:**")
     st.error("1. **Check Camera Permissions**:")
-    st.error("   - System Settings → Privacy & Security → Camera")
-    st.error("   - Enable Terminal/IDE/Python")
-    st.error("   - Restart Streamlit after granting permissions")
+    if _system == "Darwin":  # macOS
+        st.error("   - System Settings → Privacy & Security → Camera")
+        st.error("   - Enable Terminal/IDE/Python")
+        st.error("   - Restart Streamlit after granting permissions")
+    elif _system == "Windows":  # Windows
+        st.error("   - Settings → Privacy → Camera")
+        st.error("   - Enable camera access for your application")
+        st.error("   - Restart Streamlit after granting permissions")
+    else:  # Linux
+        st.error("   - Ensure your user has access to /dev/video* devices")
+        st.error("   - You may need to add your user to the 'video' group")
     st.error("")
     st.error("2. **Close Other Apps**: Make sure no other app is using the camera")
-    st.error("   (FaceTime, Photo Booth, Zoom, etc.)")
+    if _system == "Darwin":
+        st.error("   (FaceTime, Photo Booth, Zoom, etc.)")
+    elif _system == "Windows":
+        st.error("   (Camera app, Teams, Zoom, etc.)")
+    else:
+        st.error("   (Any application using /dev/video* devices)")
     st.error("")
     st.error("3. **Try Different Camera Index**:")
     st.error("   - Try 1, 2, 3 instead of 0")
@@ -498,9 +529,14 @@ def show_camera_error(camera_index: int) -> None:
     st.error("4. **Try Streamlit Camera Mode**: Uses browser permissions (easier)")
     st.error("")
     st.error("5. **Test Camera Access**:")
-    st.error("   ```bash")
-    st.error("   python utils/test_camera.py")
-    st.error("   ```")
+    if _system == "Windows":
+        st.error("   ```cmd")
+        st.error("   python utils\\test_camera.py")
+        st.error("   ```")
+    else:
+        st.error("   ```bash")
+        st.error("   python utils/test_camera.py")
+        st.error("   ```")
 
 
 def update_classification_metrics(frame: Optional[np.ndarray] = None) -> None:
@@ -1426,6 +1462,28 @@ def main() -> None:
     
     # Footer - minimal and professional
     st.markdown("---")
+    import platform
+    _system = platform.system()
+    
+    # Get device info for footer
+    device_info = "CPU"
+    if st.session_state.classifier:
+        device = st.session_state.classifier.get_device()
+        if "mps" in device:
+            device_info = "MPS (Apple Silicon)"
+        elif "cuda" in device:
+            device_info = "CUDA (NVIDIA GPU)"
+        else:
+            device_info = "CPU"
+    
+    footer_text = f"Powered by PyTorch {device_info}"
+    if _system == "Darwin":
+        footer_text += " • Mac Optimized"
+    elif _system == "Windows":
+        footer_text += " • Windows"
+    else:
+        footer_text += f" • {_system}"
+    
     st.markdown(
         f"""
         <div style='
@@ -1434,7 +1492,7 @@ def main() -> None:
             padding: 15px;
             font-size: 12px;
         '>
-            <p style="margin: 5px 0;">Powered by PyTorch MPS • Mac Mini M4 Optimized</p>
+            <p style="margin: 5px 0;">{footer_text}</p>
             <p style="margin: 5px 0;">Model: {MODEL_NAME.split('/')[-1]}</p>
         </div>
         """,

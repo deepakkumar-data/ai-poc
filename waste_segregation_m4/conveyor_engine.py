@@ -11,12 +11,27 @@ from collections import deque
 import time
 from classifier import WasteClassifier
 
-# Camera backends for macOS compatibility
-CAMERA_BACKENDS = [
-    (cv2.CAP_AVFOUNDATION, "AVFoundation (macOS native)"),
-    (cv2.CAP_ANY, "Default"),
-    (cv2.CAP_QT, "QuickTime"),
-]
+# Camera backends - cross-platform support
+import platform
+_system = platform.system()
+
+if _system == "Darwin":  # macOS
+    CAMERA_BACKENDS = [
+        (cv2.CAP_AVFOUNDATION, "AVFoundation (macOS native)"),
+        (cv2.CAP_ANY, "Default"),
+        (cv2.CAP_QT, "QuickTime"),
+    ]
+elif _system == "Windows":  # Windows
+    CAMERA_BACKENDS = [
+        (cv2.CAP_DSHOW, "DirectShow (Windows native)"),
+        (cv2.CAP_ANY, "Default"),
+        (cv2.CAP_MSMF, "Microsoft Media Foundation"),
+    ]
+else:  # Linux and others
+    CAMERA_BACKENDS = [
+        (cv2.CAP_V4L2, "Video4Linux2 (Linux)"),
+        (cv2.CAP_ANY, "Default"),
+    ]
 
 
 class ConveyorEngine:

@@ -1,22 +1,38 @@
 #!/usr/bin/env python3
 """
 Camera Testing Script
-Tests available cameras and finds which ones work on macOS
+Tests available cameras - cross-platform support (macOS, Windows, Linux)
 """
 
 import cv2
 import sys
+import platform
 
 def test_cameras(max_index: int = 5):
     """Test cameras from index 0 to max_index."""
     print("🔍 Testing available cameras...\n")
     
     available_cameras = []
-    backends = [
-        (cv2.CAP_AVFOUNDATION, "AVFoundation (macOS native)"),
-        (cv2.CAP_ANY, "Default"),
-        (cv2.CAP_QT, "QuickTime"),
-    ]
+    _system = platform.system()
+    
+    # Select appropriate backends for the platform
+    if _system == "Darwin":  # macOS
+        backends = [
+            (cv2.CAP_AVFOUNDATION, "AVFoundation (macOS native)"),
+            (cv2.CAP_ANY, "Default"),
+            (cv2.CAP_QT, "QuickTime"),
+        ]
+    elif _system == "Windows":  # Windows
+        backends = [
+            (cv2.CAP_DSHOW, "DirectShow (Windows native)"),
+            (cv2.CAP_ANY, "Default"),
+            (cv2.CAP_MSMF, "Microsoft Media Foundation"),
+        ]
+    else:  # Linux and others
+        backends = [
+            (cv2.CAP_V4L2, "Video4Linux2 (Linux)"),
+            (cv2.CAP_ANY, "Default"),
+        ]
     
     for i in range(max_index):
         camera_found = False
@@ -53,9 +69,17 @@ def test_cameras(max_index: int = 5):
     else:
         print("❌ No cameras found!")
         print("\nTroubleshooting:")
-        print("1. Check camera permissions:")
-        print("   System Settings → Privacy & Security → Camera")
-        print("   Enable Terminal/IDE/Python")
+        if _system == "Darwin":  # macOS
+            print("1. Check camera permissions:")
+            print("   System Settings → Privacy & Security → Camera")
+            print("   Enable Terminal/IDE/Python")
+        elif _system == "Windows":  # Windows
+            print("1. Check camera permissions:")
+            print("   Settings → Privacy → Camera")
+            print("   Enable camera access for your application")
+        else:  # Linux
+            print("1. Check camera permissions:")
+            print("   Ensure your user has access to /dev/video* devices")
         print("2. Make sure no other app is using the camera")
         print("3. Check if camera is connected (for external cameras)")
         sys.exit(1)

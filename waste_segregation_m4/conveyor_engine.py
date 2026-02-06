@@ -102,10 +102,11 @@ class ConveyorEngine:
         if self.frame_width is None or self.frame_height is None:
             self.frame_height, self.frame_width = frame.shape[:2]
             
-            # Set default ROI if not provided (80% of frame, centered)
+            # Set default ROI if not provided (90% of frame, centered)
+            # Increased from 80% to 90% to capture more of the frame for detection
             if self.roi is None:
-                roi_width = int(self.frame_width * 0.8)
-                roi_height = int(self.frame_height * 0.8)
+                roi_width = int(self.frame_width * 0.9)
+                roi_height = int(self.frame_height * 0.9)
                 roi_x = (self.frame_width - roi_width) // 2
                 roi_y = (self.frame_height - roi_height) // 2
                 self.roi = (roi_x, roi_y, roi_width, roi_height)
@@ -120,6 +121,21 @@ class ConveyorEngine:
         x, y, w, h = self.roi
         mask[y:y+h, x:x+w] = 255
         return mask
+    
+    def _draw_dashed_rectangle(self, img, pt1, pt2, color, thickness=1, dash_length=10):
+        """Draw a dashed rectangle on the image."""
+        x1, y1 = pt1
+        x2, y2 = pt2
+        
+        # Top and bottom lines
+        for x in range(x1, x2, dash_length * 2):
+            cv2.line(img, (x, y1), (min(x + dash_length, x2), y1), color, thickness)
+            cv2.line(img, (x, y2), (min(x + dash_length, x2), y2), color, thickness)
+        
+        # Left and right lines
+        for y in range(y1, y2, dash_length * 2):
+            cv2.line(img, (x1, y), (x1, min(y + dash_length, y2)), color, thickness)
+            cv2.line(img, (x2, y), (x2, min(y + dash_length, y2)), color, thickness)
     
     def _detect_objects(self, frame: np.ndarray, roi_mask: np.ndarray) -> List[Dict]:
         """
@@ -143,7 +159,9 @@ class ConveyorEngine:
         contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         objects = []
-        min_area = 200  # Minimum object area to filter noise (was 500 - reduced for better detection)
+        # Increased minimum area to ensure we detect complete objects, not noise
+        # But still lower than original to catch smaller objects
+        min_area = 400  # Minimum object area to filter noise (balanced: not too small, not too large)
         
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -336,28 +354,54 @@ class ConveyorEngine:
         """
         Classify an object using the waste classifier.
         Extracts ROI around the object and runs inference.
+        Uses larger padding to capture more context for better accuracy.
         """
         x, y, w, h = obj['bbox']
         
-        # Expand bounding box slightly for better classification
-        padding = 20
-        x = max(0, x - padding)
-        y = max(0, y - padding)
-        w = min(frame.shape[1] - x, w + 2 * padding)
-        h = min(frame.shape[0] - y, h + 2 * padding)
+        # Expand bounding box significantly for better classification accuracy
+        # Use percentage-based padding to ensure we capture enough context
+        # For small objects, use larger padding; for large objects, use proportional padding
+        padding_ratio = 0.3  # 30% padding on all sides
+        padding_x = max(30, int(w * padding_ratio))  # At least 30 pixels, or 30% of width
+        padding_y = max(30, int(h * padding_ratio))  # At least 30 pixels, or 30% of height
         
-        # Extract object region
-        object_roi = frame[y:y+h, x:x+w]
+        # Ensure minimum size for classification (models work better with larger images)
+        min_size = 100  # Minimum dimension for classification
+        if w < min_size:
+            padding_x = max(padding_x, (min_size - w) // 2 + 10)
+        if h < min_size:
+            padding_y = max(padding_y, (min_size - h) // 2 + 10)
         
-        if object_roi.size == 0:
+        # Calculate expanded bounding box
+        x_expanded = max(0, x - padding_x)
+        y_expanded = max(0, y - padding_y)
+        w_expanded = min(frame.shape[1] - x_expanded, w + 2 * padding_x)
+        h_expanded = min(frame.shape[0] - y_expanded, h + 2 * padding_y)
+        
+        # Extract object region with context
+        object_roi = frame[y_expanded:y_expanded+h_expanded, x_expanded:x_expanded+w_expanded]
+        
+        if object_roi.size == 0 or object_roi.shape[0] < 50 or object_roi.shape[1] < 50:
+            print(f"⚠️  Object ROI too small for classification: {object_roi.shape if object_roi.size > 0 else 'empty'}")
             return "unknown", 0.0
+        
+        # Resize if too small (but maintain aspect ratio)
+        # Most models expect at least 224x224 or similar
+        target_min_size = 224
+        if min(object_roi.shape[0], object_roi.shape[1]) < target_min_size:
+            scale = target_min_size / min(object_roi.shape[0], object_roi.shape[1])
+            new_w = int(object_roi.shape[1] * scale)
+            new_h = int(object_roi.shape[0] * scale)
+            object_roi = cv2.resize(object_roi, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            print(f"📏 Resized object ROI from {object_roi.shape[:2]} to {new_h}x{new_w} for better classification")
         
         # Classify
         try:
             label, confidence = self.classifier.predict(object_roi)
+            print(f"🔍 Classified with ROI size: {object_roi.shape[1]}x{object_roi.shape[0]} (original bbox: {w}x{h})")
             return label, confidence
         except Exception as e:
-            print(f"Classification error: {e}")
+            print(f"❌ Classification error: {e}")
             return "unknown", 0.0
     
     def _draw_overlays(
@@ -412,6 +456,26 @@ class ConveyorEngine:
                 color = (0, 255, 0)  # Green for classified objects
             
             cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 2)
+            
+            # Draw expanded classification region (dashed line) if object is being classified
+            if tracked_data.get('label') or (cx >= self.trigger_line_x if self.trigger_line_x else False):
+                # Calculate expanded region (same as in _classify_object)
+                padding_ratio = 0.3
+                padding_x = max(30, int(w * padding_ratio))
+                padding_y = max(30, int(h * padding_ratio))
+                min_size = 100
+                if w < min_size:
+                    padding_x = max(padding_x, (min_size - w) // 2 + 10)
+                if h < min_size:
+                    padding_y = max(padding_y, (min_size - h) // 2 + 10)
+                
+                x_exp = max(0, x - padding_x)
+                y_exp = max(0, y - padding_y)
+                w_exp = min(overlay.shape[1] - x_exp, w + 2 * padding_x)
+                h_exp = min(overlay.shape[0] - y_exp, h + 2 * padding_y)
+                
+                # Draw expanded region with dashed line (yellow)
+                self._draw_dashed_rectangle(overlay, (x_exp, y_exp), (x_exp + w_exp, y_exp + h_exp), (0, 255, 255), 2)
             
             # Draw centroid
             cv2.circle(overlay, (cx, cy), 5, color, -1)
